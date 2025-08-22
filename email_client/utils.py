@@ -1,30 +1,51 @@
 import json
 import csv
+import re
+
+def is_valid_email(email: str) -> bool:
+    """
+    使用一个简单的正则表达式来验证邮箱格式。
+    """
+    if not email:
+        return False
+    # 一个相对宽松但常用的邮箱格式正则表达式
+    pattern = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+    return pattern.match(email) is not None
 
 def load_emails_from_file(filepath: str):
     """
     从文件中加载邮件列表。
-    支持 JSON 和 CSV 格式。
-
-    对于 JSON，文件应包含一个对象列表，每个对象都有一个 "email" 键
-    和可选的 "def1" 到 "def5" 键。
-    例如: [{"email": "test@example.com", "def1": "value1"}]
-
-    对于 CSV，文件应有标题行。
-    标题必须包含 "email"。可选的标题是 "def1" 到 "def5"。
-    例如:
-    email,def1,def2
-    test@example.com,val1,val2
-
-    返回一个字典列表，如果格式无效则引发错误。
+    支持 TXT, JSON, 和 CSV 格式。
+    加载时会自动进行小写转换和去重。
     """
-    if filepath.lower().endswith('.json'):
+    if not filepath:
+        raise ValueError("未提供文件路径。")
+
+    unique_emails = set()
+
+    if filepath.lower().endswith('.txt'):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    email = line.strip()
+                    if is_valid_email(email):
+                        unique_emails.add(email.lower())
+        except FileNotFoundError:
+            raise ValueError(f"文件未找到: {filepath}")
+
+    elif filepath.lower().endswith('.json'):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             if not isinstance(data, list):
                 raise ValueError("JSON 文件必须包含一个邮件对象的列表。")
-            return data
+
+            for item in data:
+                email = item.get("email", "").strip()
+                if is_valid_email(email):
+                    # 为了保持一致性，即使是JSON/CSV，也只取email并去重
+                    unique_emails.add(email.lower())
+
         except json.JSONDecodeError:
             raise ValueError("无效的 JSON 格式。")
         except FileNotFoundError:
@@ -32,22 +53,23 @@ def load_emails_from_file(filepath: str):
 
     elif filepath.lower().endswith('.csv'):
         try:
-            # 使用 'utf-8-sig' 来处理可能由Excel等软件在文件开头添加的BOM
             with open(filepath, 'r', encoding='utf-8-sig', newline='') as f:
-                # 使用 DictReader 直接将行转换为字典
                 reader = csv.DictReader(f)
-
-                # 清理并验证 'email' 列是否存在
-                fieldnames = [field.strip() for field in reader.fieldnames]
+                fieldnames = [field.strip().lower() for field in reader.fieldnames]
                 if 'email' not in fieldnames:
                     raise ValueError("CSV 文件必须包含一个 'email' 列。")
 
-                # 清理每行数据中键名可能带有的空格
-                data = []
                 for row in reader:
-                    data.append({key.strip(): value for key, value in row.items()})
-                return data
+                    email = row.get("email", "").strip()
+                    if is_valid_email(email):
+                        unique_emails.add(email.lower())
         except FileNotFoundError:
             raise ValueError(f"文件未找到: {filepath}")
     else:
-        raise ValueError("不支持的文件格式。请使用 .json 或 .csv。")
+        raise ValueError("不支持的文件格式。请使用 .txt, .json 或 .csv。")
+
+    # 将去重后的email集合转换为API所需的字典列表格式
+    # 注意：由于TXT格式没有宏，为了统一，我们现在只处理email字段。
+    # 如果未来需要支持从CSV/JSON加载宏，这里的逻辑需要调整。
+    # 当前根据用户最新需求，统一为只加载和处理email。
+    return [{"email": email} for email in sorted(list(unique_emails))]

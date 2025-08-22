@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
 import time
+import re # 引入正则表达式库用于邮箱验证
 from api import ApiClient
 from utils import load_emails_from_file
 
@@ -104,13 +105,16 @@ class EmailClientGUI:
         self.status_summary_label.pack(side='left')
 
     def load_email_file(self):
-        # ... (same as before, collapsed for brevity)
-        filepath = filedialog.askopenfilename(filetypes=(("CSV 文件", "*.csv"), ("JSON 文件", "*.json"), ("所有文件", "*.*")))
+        filepath = filedialog.askopenfilename(
+            title="请选择邮件文件",
+            filetypes=(("文本文件", "*.txt"), ("CSV 文件", "*.csv"), ("JSON 文件", "*.json"), ("所有文件", "*.*"))
+        )
         if not filepath: return
         try:
+            # 现在load_emails_from_file会处理去重和验证
             self.email_list = load_emails_from_file(filepath)
             self.populate_email_treeview()
-            messagebox.showinfo("加载成功", f"成功加载 {len(self.email_list)} 封邮件。")
+            messagebox.showinfo("加载成功", f"成功加载 {len(self.email_list)} 个有效且唯一的邮箱地址。")
         except Exception as e:
             messagebox.showerror("加载失败", f"加载文件时出错: {e}")
 
@@ -171,23 +175,33 @@ class EmailClientGUI:
             self.root.after(0, self.send_button.config, {"state": "normal"})
 
     def create_push_tab_widgets(self):
-        # ... (same as before, collapsed for brevity)
-        frame = ttk.Frame(self.push_tab); frame.pack(fill='both', expand=True)
+        """创建“单封推送”选项卡中的所有控件。"""
+        frame = ttk.Frame(self.push_tab)
+        frame.pack(fill='both', expand=True)
+
         fields = {"email": "收件人邮箱:", "subject": "邮件标题:", "def1": "宏定义1:", "def2": "宏定义2:", "def3": "宏定义3:", "def4": "宏定义4:", "def5": "宏定义5:"}
         self.push_vars = {}
+
         for i, (key, text) in enumerate(fields.items()):
             ttk.Label(frame, text=text).grid(row=i, column=0, padx=5, pady=5, sticky='w')
             var = tk.StringVar(); self.push_vars[key] = var
             ttk.Entry(frame, textvariable=var, width=60).grid(row=i, column=1, padx=5, pady=5, sticky='we')
+
         ttk.Label(frame, text="邮件内容:").grid(row=len(fields), column=0, padx=5, pady=5, sticky='nw')
         self.push_content_text = tk.Text(frame, height=10, width=60)
         self.push_content_text.grid(row=len(fields), column=1, padx=5, pady=5, sticky='we')
+
         frame.columnconfigure(1, weight=1)
+
         self.push_button = ttk.Button(frame, text="立即推送", command=self.start_push_send)
         self.push_button.grid(row=len(fields) + 1, column=1, pady=10, sticky='e')
 
+        # --- 新增：用于显示结果ID的区域 ---
+        ttk.Label(frame, text="结果ID:").grid(row=len(fields) + 2, column=0, padx=5, pady=5, sticky='w')
+        self.push_result_id_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.push_result_id_var, state='readonly', width=60).grid(row=len(fields) + 2, column=1, padx=5, pady=5, sticky='we')
+
     def start_push_send(self):
-        # ... (same as before, collapsed for brevity)
         if not self.push_vars['email'].get() or not self.push_vars['subject'].get(): messagebox.showwarning("信息不完整", "收件人邮箱和邮件标题不能为空。"); return
         if not self.api_client: messagebox.showwarning("无法发送", "请先成功测试API连接。"); return
         self.push_button.config(state="disabled")
@@ -196,14 +210,20 @@ class EmailClientGUI:
         thread.start()
 
     def _push_send_thread(self):
-        # ... (same as before, collapsed for brevity)
         try:
             data = {key: var.get() for key, var in self.push_vars.items()}
             data['content'] = self.push_content_text.get("1.0", "end-1c")
-            result = self.api_client.push_single_email(email=data['email'], subject=data['subject'], content=data['content'], def1=data['def1'], def2=data['def2'], def3=data['def3'], def4=data['def4'], def5=data['def5'])
+
+            result = self.api_client.push_single_email(
+                email=data['email'], subject=data['subject'], content=data['content'],
+                def1=data['def1'], def2=data['def2'], def3=data['def3'],
+                def4=data['def4'], def5=data['def5']
+            )
+
             if result and result.get("ret") == 200:
                 email_id = result.get("data", {}).get("email_id", "N/A")
-                self.root.after(0, messagebox.showinfo, "推送成功", f"邮件已成功推送！\nEmail ID: {email_id}")
+                self.root.after(0, self.push_result_id_var.set, email_id)
+                self.root.after(0, messagebox.showinfo, "推送成功", "邮件已成功推送！")
             else:
                 msg = result.get("msg", "未知错误")
                 self.root.after(0, messagebox.showerror, "推送失败", f"错误: {msg}")
@@ -213,86 +233,58 @@ class EmailClientGUI:
             self.root.after(0, self.push_button.config, {"state": "normal"})
 
     def create_query_tab_widgets(self):
-        """创建“结果查询”选项卡中的所有控件。"""
-        # --- Top frame for input ---
-        top_frame = ttk.Frame(self.query_tab)
-        top_frame.pack(fill='x', pady=5)
-
+        # ... (same as before, collapsed for brevity)
+        top_frame = ttk.Frame(self.query_tab); top_frame.pack(fill='x', pady=5)
         ttk.Label(top_frame, text="输入要查询的GUID (每行一个):").pack(side='left')
         self.query_button = ttk.Button(top_frame, text="查询状态", command=self.start_query_results)
         self.query_button.pack(side='right', padx=10)
-
-        # --- Text area for GUIDs ---
-        text_frame = ttk.Frame(self.query_tab)
-        text_frame.pack(expand=True, fill='both', pady=5)
+        text_frame = ttk.Frame(self.query_tab); text_frame.pack(expand=True, fill='both', pady=5)
         self.query_text = tk.Text(text_frame, height=10, width=80)
         self.query_text.pack(side='left', expand=True, fill='both')
         text_scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=self.query_text.yview)
-        text_scrollbar.pack(side='right', fill='y')
-        self.query_text.configure(yscrollcommand=text_scrollbar.set)
-
-        # --- Treeview for results ---
+        text_scrollbar.pack(side='right', fill='y'); self.query_text.configure(yscrollcommand=text_scrollbar.set)
         ttk.Label(self.query_tab, text="查询结果:").pack(fill='x', pady=(10, 0))
-        result_frame = ttk.Frame(self.query_tab)
-        result_frame.pack(expand=True, fill='both', pady=5)
+        result_frame = ttk.Frame(self.query_tab); result_frame.pack(expand=True, fill='both', pady=5)
         self.query_tree = ttk.Treeview(result_frame, columns=("guid", "status"), show='headings')
-        self.query_tree.heading("guid", text="GUID")
-        self.query_tree.heading("status", text="状态")
-        self.query_tree.column("guid", width=300)
-        self.query_tree.column("status", width=400)
+        self.query_tree.heading("guid", text="GUID"); self.query_tree.heading("status", text="状态")
+        self.query_tree.column("guid", width=300); self.query_tree.column("status", width=400)
         self.query_tree.pack(side='left', expand=True, fill='both')
         result_scrollbar = ttk.Scrollbar(result_frame, orient="vertical", command=self.query_tree.yview)
-        result_scrollbar.pack(side='right', fill='y')
-        self.query_tree.configure(yscrollcommand=result_scrollbar.set)
+        result_scrollbar.pack(side='right', fill='y'); self.query_tree.configure(yscrollcommand=result_scrollbar.set)
 
     def start_query_results(self):
-        """验证并启动结果查询线程。"""
         guids_str = self.query_text.get("1.0", "end-1c").strip()
-        if not guids_str:
-            messagebox.showwarning("信息不完整", "请输入至少一个GUID进行查询。")
-            return
-        if not self.api_client:
-            messagebox.showwarning("无法查询", "请先成功测试API连接。")
-            return
-
+        if not guids_str: messagebox.showwarning("信息不完整", "请输入至少一个GUID进行查询。"); return
+        if not self.api_client: messagebox.showwarning("无法查询", "请先成功测试API连接。"); return
         self.query_button.config(state="disabled")
         thread = threading.Thread(target=self._query_results_thread, args=(guids_str,))
         thread.daemon = True
         thread.start()
 
     def _query_results_thread(self, guids_str):
-        """在后台线程中执行查询。"""
         try:
             guids = [line.strip() for line in guids_str.splitlines() if line.strip()]
-            if not guids:
-                raise ValueError("未提供有效的GUID。")
-
+            if not guids: raise ValueError("未提供有效的GUID。")
             result = self.api_client.query_send_results(guids)
-
             if result and result.get("ret") == 200:
                 results_data = result.get("data", {}).get("result", [])
                 self.root.after(0, self.populate_query_tree, results_data)
             else:
                 msg = result.get("msg", "未知错误")
                 self.root.after(0, messagebox.showerror, "查询失败", f"错误: {msg}")
-
         except Exception as e:
             self.root.after(0, messagebox.showerror, "查询出错", str(e))
         finally:
             self.root.after(0, self.query_button.config, {"state": "normal"})
 
     def populate_query_tree(self, results_data):
-        """将查询结果填充到Treeview中。"""
-        for item in self.query_tree.get_children():
-            self.query_tree.delete(item)
-
+        for item in self.query_tree.get_children(): self.query_tree.delete(item)
         for res_str in results_data:
             try:
                 guid, status = res_str.split('_', 1)
-                status = status.replace('|', ': ', 1) # 让格式更友好
+                status = status.replace('|', ': ', 1)
             except ValueError:
-                guid = res_str
-                status = "格式无法解析"
+                guid = res_str; status = "格式无法解析"
             self.query_tree.insert("", "end", values=(guid, status))
 
 if __name__ == "__main__":
