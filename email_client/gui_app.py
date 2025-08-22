@@ -113,19 +113,30 @@ class EmailClientGUI:
         ttk.Entry(scrollable_frame, textvariable=self.push_result_id_var, state='readonly', width=80).grid(row=len(fields) + 2, column=1, padx=5, pady=5, sticky='we')
 
     def _bulk_send_thread(self):
-        total_emails = len(self.email_list)
-        self.root.after(0, self.progress_bar.config, {"maximum": total_emails, "value": 0})
-        # 初始化状态显示
-        initial_status_text = f"成功: 0 | 失败: 0 | 总计: {total_emails}"
-        self.root.after(0, self.status_summary_label.config, {"text": initial_status_text})
+        submitted_total = len(self.email_list)
 
         try:
             tid = self.tid_var.get(); tid = int(tid) if tid.isdigit() else None
             send_response = self.api_client.send_bulk_emails(self.email_list, template_id=tid)
             if send_response.get("ret") != 200: raise Exception(f"API提交失败: {send_response.get('msg', '未知错误')}")
 
-            email_ids = send_response.get("data", {}).get("email_id", [])
+            # --- 关键改进：使用服务器返回的实际任务数作为总数 ---
+            response_data = send_response.get("data", {})
+            email_ids = response_data.get("email_id", [])
             guids_to_query = [item.split('_')[1] for item in email_ids if '_' in item]
+            jobs_to_track = len(guids_to_query)
+
+            # 如果服务器过滤了部分邮件，弹窗提示用户
+            # 使用服务器返回的 received 数值，如果不存在则用 GUID 数量代替
+            received_count = response_data.get('received', jobs_to_track)
+            filtered_count = submitted_total - received_count
+            if filtered_count > 0:
+                self.root.after(0, messagebox.showinfo, "提交提示", f"提交 {submitted_total} 封邮件，服务器成功接收 {received_count} 封，过滤 {filtered_count} 封。")
+
+            total_emails = jobs_to_track # 使用实际任务数作为总数
+            self.root.after(0, self.progress_bar.config, {"maximum": total_emails, "value": 0})
+            initial_status_text = f"成功: 0 | 失败: 0 | 总计: {total_emails}"
+            self.root.after(0, self.status_summary_label.config, {"text": initial_status_text})
 
             results = {} # guid -> status_code
             success_count, failure_count = 0, 0
@@ -143,6 +154,9 @@ class EmailClientGUI:
                             guid, status_part = res_str.split('_', 1)
                             if guid not in results:
                                 status_code = status_part.split('|', 1)[0]
+                            # 关键修复：只有当状态码表示一个最终状态时（>=2），才将其计入结果
+                            # 这样可以忽略“正在发送中”（例如状态码为0或1）的邮件，并继续轮询
+                            if status_code >= '2':
                                 results[guid] = status_code
                                 if status_code == '2':
                                     success_count += 1
