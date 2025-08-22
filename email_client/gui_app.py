@@ -295,7 +295,7 @@ class EmailClientGUI:
             if not guids: raise ValueError("未提供有效的GUID。")
             result = self.api_client.query_send_results(guids)
             if result and result.get("ret") == 200:
-                results__data = result.get("data", {}).get("result", [])
+                results_data = result.get("data", {}).get("result", [])
                 self.root.after(0, self.populate_query_tree, results_data)
             else:
                 msg = result.get("msg", "未知错误")
